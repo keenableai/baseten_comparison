@@ -1,5 +1,3 @@
-"""Benchmark definitions: where the CSV lives and which columns hold the question and answer."""
-
 import csv
 import io
 import random
@@ -10,7 +8,6 @@ import httpx
 
 
 def omniscience_index(grades: list[str]) -> float:
-    """AA-Omniscience headline metric: (+1 correct, -1 incorrect, 0 declined) × 100."""
     return 100.0 * (grades.count("CORRECT") - grades.count("INCORRECT")) / len(grades)
 
 
@@ -39,7 +36,6 @@ class Benchmark:
     extra_summary: Callable[[list[dict]], None] | None = None
 
     def load(self, n: int, seed: int) -> list[dict]:
-        """Return n shuffled rows as {question, target, metadata}."""
         resp = httpx.get(self.url, timeout=60.0, follow_redirects=True)
         resp.raise_for_status()
         rows = list(csv.DictReader(io.StringIO(resp.text)))

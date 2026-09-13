@@ -29,4 +29,16 @@ rows with `--resume` on the same output path.
 ## Prices
 
 Per-token model prices and per-call search prices live in `src/baseten_comparison/harness.py`.
-Keenable has no public per-request price; $4/1k is an internal figure applied to search and fetch.
+
+- Model: Baseten serverless $/M tokens, July 2026 list prices (models.dev). DeepSeek-V4-Flash-0731
+  and GLM-5.2-Fast have no published Baseten rate; official/Fireworks list prices are used.
+- Search, $/1k calls, Aug 2026: Exa $7 search / $1 contents (exa.ai/pricing), Parallel $5
+  (docs.parallel.ai), You.com $5 search / $1 contents (you.com/pricing). Keenable has no public
+  per-request price; $4/1k is an internal figure applied to search and fetch.
+
+Pass `--model_input_price` / `--model_output_price` to override the table for one run.
+
+## CLI flags
+
+`uv run bench -- --help` lists them. `--resume` keeps rows whose question, target, benchmark,
+provider, model and grader match the current run; everything else is rerun.

@@ -1,9 +1,6 @@
-"""Answer questions with a Baseten model + server-side search tools; grade via OpenRouter."""
-
 import json
 import os
 import random
-import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -55,8 +52,6 @@ Reply with exactly one letter: A, B, or C. No other text.
 GRADE_NAMES = {"A": "CORRECT", "B": "INCORRECT", "C": "NOT_ATTEMPTED"}
 ERROR_GRADES = ("ERROR", "GRADER_ERROR")
 
-# Baseten serverless $/M tokens (input, output), July 2026 list prices (models.dev).
-# Flash-0731 and GLM-5.2-Fast have no published Baseten rate; using official/Fireworks list prices.
 MODEL_PRICES = {
     "deepseek-ai/DeepSeek-V4-Pro": (1.74, 3.48),
     "deepseek-ai/DeepSeek-V4-Flash-0731": (0.14, 0.28),
@@ -68,9 +63,6 @@ MODEL_PRICES = {
     "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": (0.60, 2.40),
 }
 
-# $/1k tool calls, Aug 2026 list prices: exa.ai/pricing (search $7, contents $1/1k pages),
-# docs.parallel.ai (Search API $5/1k default mode), you.com/pricing (search $5, contents $1).
-# Keenable has no public per-request price; $4/1k per internal figure, applied to both tools.
 SEARCH_PRICES_PER_1K = {
     "baseten__keenable__search_web_pages": 4.00,
     "baseten__keenable__fetch_page_content": 4.00,
@@ -107,7 +99,6 @@ def make_client(api_key: str) -> Anthropic:
 def answer_question(
     client: Anthropic, model: str, server_tools: list[str], system: str, question: str
 ) -> tuple[str, dict, float]:
-    """Return (predicted_text, raw_response, latency_s). Retries 429s with backoff."""
     start = time.perf_counter()
     for attempt in range(RATE_LIMIT_RETRIES):
         try:
@@ -129,10 +120,13 @@ def answer_question(
     return predicted, final.model_dump(mode="json", warnings=False), latency
 
 
+def parse_grade(content: str) -> str:
+    return GRADE_NAMES.get(content.strip().rstrip("."), "GRADER_ERROR")
+
+
 def grade_answer(
     grader_key: str, grader_model: str, question: str, target: str, predicted: str
 ) -> tuple[str, dict, float]:
-    """Return (grade, raw_response_body, latency_s)."""
     start = time.perf_counter()
     resp = httpx.post(
         OPENROUTER_URL,
@@ -156,19 +150,32 @@ def grade_answer(
     latency = time.perf_counter() - start
     resp.raise_for_status()
     body = resp.json()
-    content = body["choices"][0]["message"].get("content") or ""
-    letters = re.findall(r"\b([ABC])\b", content)
-    grade = GRADE_NAMES.get(letters[-1], "GRADER_ERROR") if letters else "GRADER_ERROR"
+    grade = parse_grade(body["choices"][0]["message"].get("content") or "")
     return grade, body, latency
 
 
-def load_kept_rows(path: str) -> dict[int, dict]:
-    """Rows from a previous run that need no rerun, keyed by sample index."""
+def load_kept_rows(path: str, samples: list[dict], run_meta: dict) -> dict[int, dict]:
     if not os.path.exists(path):
         return {}
+    kept: dict[int, dict] = {}
     with open(path, encoding="utf-8") as f:
-        rows = (json.loads(line) for line in f)
-        return {r["index"]: r for r in rows if r["grade"] not in ERROR_GRADES}
+        for line in f:
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                print(f"skipping unreadable line in {path}")
+                continue
+            idx = r.get("index")
+            if r.get("grade") in ERROR_GRADES or not 0 <= idx < len(samples):
+                continue
+            sample = samples[idx]
+            same_sample = (r.get("question"), r.get("target")) == (
+                sample["question"],
+                sample["target"],
+            )
+            if same_sample and all(r.get(k) == v for k, v in run_meta.items()):
+                kept[idx] = r
+    return kept
 
 
 def run_benchmark(
@@ -183,6 +190,8 @@ def run_benchmark(
     model_prices: tuple[float, float] | None,
     resume: bool,
 ) -> list[dict]:
+    if n < 1 or concurrency < 1:
+        raise ValueError("n and concurrency must be >= 1")
     baseten_key = os.environ["BASETEN_API_KEY"]
     grader_key = os.environ["OPENROUTER_API_KEY"]
     server_tools = (
@@ -193,7 +202,13 @@ def run_benchmark(
     system = SYSTEM + benchmark.system_suffix
 
     samples = benchmark.load(n, seed)
-    done = load_kept_rows(output) if resume else {}
+    run_meta = {
+        "benchmark": benchmark.name,
+        "provider": provider,
+        "model": model,
+        "grader_model": grader_model,
+    }
+    done = load_kept_rows(output, samples, run_meta) if resume else {}
     todo = [(i, s) for i, s in enumerate(samples) if i not in done]
     print(f"{len(done)} rows kept, {len(todo)} to run")
 
@@ -212,10 +227,7 @@ def run_benchmark(
             "question": question,
             "target": target,
             "metadata": sample["metadata"],
-            "benchmark": benchmark.name,
-            "model": model,
-            "provider": provider,
-            "grader_model": grader_model,
+            **run_meta,
             "predicted": None,
             "grade": "ERROR",
             "model_response": None,

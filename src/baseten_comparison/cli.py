@@ -27,21 +27,6 @@ def run(
     model_output_price: float | None = None,
     resume: bool = False,
 ) -> None:
-    """Run N benchmark samples through a Baseten model + search provider and grade them.
-
-    Args:
-        benchmark: simpleqa (1000 rows) or omniscience (600 rows).
-        n: number of samples.
-        provider: one of exa/keenable/parallel/youcom, or "all".
-        model: Baseten model slug; defaults to $BASETEN_MODEL or DeepSeek-V4-Pro.
-        grader_model: OpenRouter model slug for grading.
-        output: output JSONL path; defaults to <benchmark>_<provider>_<model tail>.jsonl.
-        seed: sampling seed.
-        concurrency: parallel questions in flight. Baseten 429s above ~12 total.
-        model_input_price: Baseten $/M input tokens; overrides the built-in price table.
-        model_output_price: Baseten $/M output tokens.
-        resume: keep non-error rows already in `output`; rerun only the rest.
-    """
     load_dotenv()
     if benchmark not in BENCHMARKS:
         sys.exit(f"unknown benchmark {benchmark!r}; choose from {sorted(BENCHMARKS)}")
@@ -51,12 +36,15 @@ def run(
         if not os.environ.get(var):
             sys.exit(f"export {var} first")
 
+    if n < 1 or concurrency < 1:
+        sys.exit("n and concurrency must be >= 1")
+
     model = model or os.environ.get("BASETEN_MODEL") or DEFAULT_MODEL
-    if model_input_price is not None and model_output_price is not None:
-        model_prices = (model_input_price, model_output_price)
-    else:
-        model_prices = MODEL_PRICES.get(model)
-    output = output or f"{benchmark}_{provider}_{model.rsplit('/', 1)[-1]}.jsonl"
+    table_in, table_out = MODEL_PRICES.get(model, (None, None))
+    in_price = model_input_price if model_input_price is not None else table_in
+    out_price = model_output_price if model_output_price is not None else table_out
+    model_prices = (in_price, out_price) if in_price is not None and out_price is not None else None
+    output = output or f"{benchmark}_{provider}_{model.replace('/', '_')}.jsonl"
 
     run_benchmark(
         BENCHMARKS[benchmark],
