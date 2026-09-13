@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# benchmark outputs
+*.jsonl
+.ruff_cache/
