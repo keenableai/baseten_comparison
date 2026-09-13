@@ -40,5 +40,5 @@ Pass `--model_input_price` / `--model_output_price` to override the table for on
 
 ## CLI flags
 
-`uv run bench -- --help` lists them. `--resume` keeps rows whose question, target, benchmark,
-provider, model and grader match the current run; everything else is rerun.
+`uv run bench -- --help` lists them. `--resume` keeps rows whose question, benchmark, provider,
+model and grader match the current run; everything else is rerun.

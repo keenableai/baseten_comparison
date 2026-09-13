@@ -1,13 +1,13 @@
 import json
 import os
-import random
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 
 import httpx
-from anthropic import Anthropic, RateLimitError
+from anthropic import Anthropic
 
 from baseten_comparison.benchmarks import Benchmark
 
@@ -15,7 +15,6 @@ DEFAULT_BASE_URL = "https://inference.baseten.co"
 DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_GRADER_MODEL = "openai/gpt-5.5"
-RATE_LIMIT_RETRIES = 8
 
 SERVER_TOOLS_BY_PROVIDER = {
     "exa": ["baseten__exa__web_search_exa", "baseten__exa__web_fetch_exa"],
@@ -23,6 +22,7 @@ SERVER_TOOLS_BY_PROVIDER = {
     "parallel": ["baseten__parallel__web_search"],
     "youcom": ["baseten__youcom__you-search", "baseten__youcom__you-contents"],
 }
+SERVER_TOOLS_BY_PROVIDER["all"] = [t for ts in SERVER_TOOLS_BY_PROVIDER.values() for t in ts]
 
 SYSTEM = (
     "You are a precise assistant with web search. "
@@ -74,17 +74,25 @@ SEARCH_PRICES_PER_1K = {
 }
 
 
-def count_search_calls(content: list[dict]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for block in content:
-        if block.get("type", "").endswith("tool_use"):
-            name = block.get("name") or "unknown"
-            counts[name] = counts.get(name, 0) + 1
-    return counts
+def count_search_calls(content: list[dict]) -> Counter[str]:
+    return Counter(
+        b.get("name") or "unknown" for b in content if b.get("type", "").endswith("tool_use")
+    )
 
 
 def search_cost(calls: dict[str, int]) -> float:
     return sum(n * SEARCH_PRICES_PER_1K.get(name, 0.0) / 1000 for name, n in calls.items())
+
+
+def resolve_model_prices(
+    model: str, input_override: float | None, output_override: float | None
+) -> tuple[float, float] | None:
+    table_in, table_out = MODEL_PRICES.get(model, (None, None))
+    in_price = table_in if input_override is None else input_override
+    out_price = table_out if output_override is None else output_override
+    if in_price is None or out_price is None:
+        return None
+    return in_price, out_price
 
 
 def make_client(api_key: str) -> Anthropic:
@@ -93,6 +101,7 @@ def make_client(api_key: str) -> Anthropic:
         base_url=os.environ.get("BASETEN_BASE_URL", DEFAULT_BASE_URL),
         default_headers={"Authorization": f"Bearer {api_key}", "x-baseten-server-tools": "true"},
         timeout=180.0,
+        max_retries=8,
     )
 
 
@@ -100,21 +109,14 @@ def answer_question(
     client: Anthropic, model: str, server_tools: list[str], system: str, question: str
 ) -> tuple[str, dict, float]:
     start = time.perf_counter()
-    for attempt in range(RATE_LIMIT_RETRIES):
-        try:
-            final = client.messages.create(
-                model=model,
-                max_tokens=4096,
-                system=system,
-                tools=[{"type": t} for t in server_tools],
-                extra_body={"thinking": {"type": "enabled", "budget_tokens": 1024}},
-                messages=[{"role": "user", "content": question}],
-            )
-            break
-        except RateLimitError:
-            if attempt == RATE_LIMIT_RETRIES - 1:
-                raise
-            time.sleep(min(60.0, 2.0**attempt) + random.random())
+    final = client.messages.create(
+        model=model,
+        max_tokens=4096,
+        system=system,
+        tools=[{"type": t} for t in server_tools],
+        extra_body={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        messages=[{"role": "user", "content": question}],
+    )
     latency = time.perf_counter() - start
     predicted = "\n".join(b.text for b in final.content if b.type == "text").strip()
     return predicted, final.model_dump(mode="json", warnings=False), latency
@@ -125,12 +127,11 @@ def parse_grade(content: str) -> str:
 
 
 def grade_answer(
-    grader_key: str, grader_model: str, question: str, target: str, predicted: str
+    grader: httpx.Client, grader_model: str, question: str, target: str, predicted: str
 ) -> tuple[str, dict, float]:
     start = time.perf_counter()
-    resp = httpx.post(
+    resp = grader.post(
         OPENROUTER_URL,
-        headers={"Authorization": f"Bearer {grader_key}"},
         json={
             "model": grader_model,
             "messages": [
@@ -145,7 +146,6 @@ def grade_answer(
             "temperature": 0,
             "usage": {"include": True},
         },
-        timeout=180.0,
     )
     latency = time.perf_counter() - start
     resp.raise_for_status()
@@ -154,27 +154,21 @@ def grade_answer(
     return grade, body, latency
 
 
-def load_kept_rows(path: str, samples: list[dict], run_meta: dict) -> dict[int, dict]:
+def load_kept_rows(path: str, run_meta: dict) -> dict[str, dict]:
     if not os.path.exists(path):
         return {}
-    kept: dict[int, dict] = {}
+    kept: dict[str, dict] = {}
     with open(path, encoding="utf-8") as f:
-        for line in f:
+        for lineno, line in enumerate(f, 1):
             try:
                 r = json.loads(line)
             except json.JSONDecodeError:
-                print(f"skipping unreadable line in {path}")
+                print(f"skipping unreadable line {lineno} in {path}")
                 continue
-            idx = r.get("index")
-            if r.get("grade") in ERROR_GRADES or not 0 <= idx < len(samples):
-                continue
-            sample = samples[idx]
-            same_sample = (r.get("question"), r.get("target")) == (
-                sample["question"],
-                sample["target"],
-            )
-            if same_sample and all(r.get(k) == v for k, v in run_meta.items()):
-                kept[idx] = r
+            if r.get("grade") not in ERROR_GRADES and all(
+                r.get(k) == v for k, v in run_meta.items()
+            ):
+                kept[r["question"]] = r
     return kept
 
 
@@ -189,34 +183,26 @@ def run_benchmark(
     concurrency: int,
     model_prices: tuple[float, float] | None,
     resume: bool,
-) -> list[dict]:
-    if n < 1 or concurrency < 1:
-        raise ValueError("n and concurrency must be >= 1")
-    baseten_key = os.environ["BASETEN_API_KEY"]
-    grader_key = os.environ["OPENROUTER_API_KEY"]
-    server_tools = (
-        [tool for tools in SERVER_TOOLS_BY_PROVIDER.values() for tool in tools]
-        if provider == "all"
-        else SERVER_TOOLS_BY_PROVIDER[provider]
-    )
+) -> None:
+    server_tools = SERVER_TOOLS_BY_PROVIDER[provider]
     system = SYSTEM + benchmark.system_suffix
-
-    samples = benchmark.load(n, seed)
     run_meta = {
         "benchmark": benchmark.name,
         "provider": provider,
         "model": model,
         "grader_model": grader_model,
     }
-    done = load_kept_rows(output, samples, run_meta) if resume else {}
-    todo = [(i, s) for i, s in enumerate(samples) if i not in done]
+
+    samples = benchmark.load(n, seed)
+    done = load_kept_rows(output, run_meta) if resume else {}
+    todo = [(i, s) for i, s in enumerate(samples) if s["question"] not in done]
     print(f"{len(done)} rows kept, {len(todo)} to run")
 
-    client = make_client(baseten_key)
+    client = make_client(os.environ["BASETEN_API_KEY"])
+    grader = httpx.Client(
+        headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}, timeout=180.0
+    )
     write_lock = threading.Lock()
-    out = open(output, "w", encoding="utf-8")
-    for rec in done.values():
-        out.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     def process(idx_sample: tuple[int, dict]) -> dict:
         idx, sample = idx_sample
@@ -255,7 +241,7 @@ def run_benchmark(
                 ) / 1e6
 
             grade, grader_resp, grade_s = grade_answer(
-                grader_key, grader_model, question, target, predicted
+                grader, grader_model, question, target, predicted
             )
             record.update(grade=grade, grader_response=grader_resp)
             record["latency"]["grade_s"] = round(grade_s, 3)
@@ -273,23 +259,23 @@ def run_benchmark(
         return record
 
     run_start = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        records = [*done.values(), *pool.map(process, todo)]
-    out.close()
-    records.sort(key=lambda r: r["index"])
+    with open(output, "w", encoding="utf-8") as out:
+        for rec in done.values():
+            out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            records = [*done.values(), *pool.map(process, todo)]
 
     print(f"\n{len(records)} samples → {output} in {time.perf_counter() - run_start:.0f}s wall")
     print_summary(records)
     if benchmark.extra_summary:
         benchmark.extra_summary(records)
-    return records
 
 
 def print_summary(records: list[dict]) -> None:
     grades = [r["grade"] for r in records]
     total = len(grades)
-    counts = {g: grades.count(g) for g in sorted(set(grades))}
-    for grade, count in counts.items():
+    counts = Counter(grades)
+    for grade, count in sorted(counts.items()):
         print(f"  {grade}: {count} ({count / total:.0%})")
     correct = counts.get("CORRECT", 0)
     attempted = correct + counts.get("INCORRECT", 0)
@@ -305,10 +291,9 @@ def print_summary(records: list[dict]) -> None:
         if costs:
             print(f"  {label} cost: ${sum(costs):.4f}")
 
-    call_counts: dict[str, int] = {}
+    call_counts: Counter[str] = Counter()
     for r in records:
-        for name, count in (r["search_calls"] or {}).items():
-            call_counts[name] = call_counts.get(name, 0) + count
+        call_counts.update(r["search_calls"] or {})
     if call_counts:
         breakdown = ", ".join(
             f"{name.split('__')[-1]}: {n}" for name, n in sorted(call_counts.items())

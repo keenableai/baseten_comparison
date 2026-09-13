@@ -8,8 +8,8 @@ from baseten_comparison.benchmarks import BENCHMARKS
 from baseten_comparison.harness import (
     DEFAULT_GRADER_MODEL,
     DEFAULT_MODEL,
-    MODEL_PRICES,
     SERVER_TOOLS_BY_PROVIDER,
+    resolve_model_prices,
     run_benchmark,
 )
 
@@ -30,8 +30,8 @@ def run(
     load_dotenv()
     if benchmark not in BENCHMARKS:
         sys.exit(f"unknown benchmark {benchmark!r}; choose from {sorted(BENCHMARKS)}")
-    if provider != "all" and provider not in SERVER_TOOLS_BY_PROVIDER:
-        sys.exit(f"unknown provider {provider!r}; choose from {[*SERVER_TOOLS_BY_PROVIDER, 'all']}")
+    if provider not in SERVER_TOOLS_BY_PROVIDER:
+        sys.exit(f"unknown provider {provider!r}; choose from {sorted(SERVER_TOOLS_BY_PROVIDER)}")
     for var in ("BASETEN_API_KEY", "OPENROUTER_API_KEY"):
         if not os.environ.get(var):
             sys.exit(f"export {var} first")
@@ -40,10 +40,7 @@ def run(
         sys.exit("n and concurrency must be >= 1")
 
     model = model or os.environ.get("BASETEN_MODEL") or DEFAULT_MODEL
-    table_in, table_out = MODEL_PRICES.get(model, (None, None))
-    in_price = model_input_price if model_input_price is not None else table_in
-    out_price = model_output_price if model_output_price is not None else table_out
-    model_prices = (in_price, out_price) if in_price is not None and out_price is not None else None
+    model_prices = resolve_model_prices(model, model_input_price, model_output_price)
     output = output or f"{benchmark}_{provider}_{model.replace('/', '_')}.jsonl"
 
     run_benchmark(
