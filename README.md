@@ -5,13 +5,15 @@ on SimpleQA-Verified and AA-Omniscience. A Baseten-hosted model answers each que
 search; GPT-5.5 (via OpenRouter) grades the answer against the gold target.
 
 `bench-exa-agent` runs the same benchmarks against [Exa Agent](https://exa.ai/docs/reference/agent-api-guide)
-directly (api.exa.ai, no Baseten model) with the same system prompt and grader.
+directly (api.exa.ai, no Baseten model) with the same system prompt and grader. `bench-parallel-task`
+does the same against the [Parallel Task API](https://docs.parallel.ai/task-api/task-quickstart)
+(api.parallel.ai); the Task API has no system prompt, so the prompt goes in as the text output schema.
 
 ## Setup
 
 ```bash
 uv sync
-cp .env.example .env   # then fill in BASETEN_API_KEY, OPENROUTER_API_KEY (and EXA_API_KEY for Exa Agent)
+cp .env.example .env   # then fill in BASETEN_API_KEY, OPENROUTER_API_KEY (EXA_API_KEY / PARALLEL_API_KEY for the agent runners)
 ```
 
 ## Run
@@ -22,6 +24,8 @@ uv run bench omniscience --n 600 --provider exa --model deepseek-ai/DeepSeek-V4-
 uv run bench -- --help
 uv run bench-exa-agent simpleqa --n 1000 --effort low --concurrency 8
 uv run bench-exa-agent -- --help
+uv run bench-parallel-task simpleqa --n 1000 --processor base --concurrency 20
+uv run bench-parallel-task -- --help
 ```
 
 Output is one JSONL row per question (`results/<benchmark>_<provider>_<model>.jsonl` by default, tracked with git LFS) with the
@@ -47,6 +51,10 @@ Pass `--model_input_price` / `--model_output_price` to override the table for on
 Exa Agent has a fixed price per request by `--effort` (low $0.025, medium $0.10, high $0.50; Sep 2026).
 The harness records `costDollars` as returned by the API; `usage.searches` and compute units are the
 tier's nominal allocation, not the work actually done, so they are constant per request.
+
+Parallel Task has a fixed price per successful run by `--processor` (lite $0.005, base $0.01, core $0.025,
+core2x $0.05, pro $0.10, ultra $0.30; Sep 2026). Failed runs are not billed. The API reports no search
+counts, so `search_calls` is null and `cost.model_usd` holds the per-run price.
 
 ## Single call
 
@@ -188,3 +196,44 @@ Exa returned 500s for about 15% of medium-tier requests during one window on 202
 were rerun with `--resume`. Low and high had no agent errors. One high-tier Omniscience row is
 `GRADER_ERROR` in the raw data: GPT-5.5's content filter refused the grading prompt. The answer
 (72) matches the target; it is not counted as correct above.
+
+### Parallel Task API (standalone, no Baseten model)
+
+Run 2026-09-15 with `bench-parallel-task`, same questions (seed 0), same grader. The system prompt
+is passed as the text output-schema description because the Task API has no system prompt. Cost is
+the processor's fixed per-run price times successful runs. Raw rows are in `results/` (LFS).
+Reference cells from the tables above are repeated for comparison.
+
+#### SimpleQA-Verified (1000 questions)
+
+| | Parallel Task base | Parallel Task core | Exa Agent low | Parallel + GLM-5.3-Fast | Keenable + GLM-5.3-Fast |
+| --- | --- | --- | --- | --- | --- |
+| Accuracy | **97.1%** | **96.8%** | **97.0%** | **97.4%** | **97.5%** |
+| Correct / Incorrect / Not attempted | 971 / 27 / 2 | 968 / 31 / 1 | 970 / 29 / 1 | 974 / 26 / 0 | 975 / 25 / 0 |
+| Cost | $10.00 | $25.00 | $25.00 | $16.51 | $22.60 |
+| Answer latency p50 / p90 | 19.7s / 32.7s | 19.6s / 35.1s | 9.1s / 15.7s | 4.0s / 29.1s | 3.1s / 5.0s |
+
+#### AA-Omniscience (600 questions)
+
+| | Parallel Task base | Parallel Task core | Exa Agent low | Parallel + V4.1-Flash | Keenable + V4.1-Flash |
+| --- | --- | --- | --- | --- | --- |
+| Omniscience index | **+68.8** | **+70.8** | **+73.0** | **+72.5** | **+76.2** |
+| Accuracy | 84.0% | 85.0% | 86.2% | 80.5% | 85.0% |
+| Correct / Incorrect / Not attempted | 504 / 91 / 5 | 510 / 85 / 5 | 517 / 79 / 4 | 483 / 48 / 69 | 510 / 53 / 37 |
+| Accuracy on attempted | 84.7% | 85.7% | 86.7% | 91.0% | 90.6% |
+| Cost | $6.00 | $15.00 | $15.00 | $8.36 | $15.65 |
+| Answer latency p50 / p90 | 25.0s / 56.1s | 23.3s / 59.4s | 11.3s / 20.3s | 6.2s / 36.7s | 5.6s / 30.1s |
+
+| Domain (correct / index) | Parallel Task base | Parallel Task core |
+| --- | --- | --- |
+| Finance | 82 / +64 | 83 / +68 |
+| Health | 73 / +46 | 73 / +46 |
+| Humanities and Social Sciences | 82 / +65 | 84 / +69 |
+| Law | 94 / +89 | 94 / +89 |
+| Science, Engineering and Mathematics | 79 / +61 | 80 / +61 |
+| Software Engineering | 94 / +88 | 96 / +92 |
+
+Parallel Task almost never declines (5 of 600 not attempted), so on Omniscience it trades index for
+accuracy: about the same correct count as Keenable + V4.1-Flash, with roughly 1.7x the wrong answers.
+Runs had no agent errors apart from one dropped connection on the blocking result call (core,
+Omniscience), rerun with `--resume`; the runner now retries transport errors while a run is active.

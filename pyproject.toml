@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 bench = "baseten_comparison.cli:main"
 bench-exa-agent = "baseten_comparison.exa_agent:main"
+bench-parallel-task = "baseten_comparison.parallel_task:main"
 
 [dependency-groups]
 dev = ["ruff>=0.6"]
