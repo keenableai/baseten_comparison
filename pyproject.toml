@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 bench = "baseten_comparison.cli:main"
+bench-exa-agent = "baseten_comparison.exa_agent:main"
 
 [dependency-groups]
 dev = ["ruff>=0.6"]
