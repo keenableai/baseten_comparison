@@ -205,12 +205,14 @@ def run(
     if n < 1 or concurrency < 1:
         sys.exit("n and concurrency must be >= 1")
 
+    output = output or f"results/{benchmark}_{PROVIDER}_{effort}.jsonl"
+    os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
     run_benchmark(
         BENCHMARKS[benchmark],
         n=n,
         effort=effort,
         grader_model=grader_model,
-        output=output or f"{benchmark}_{PROVIDER}_{effort}.jsonl",
+        output=output,
         seed=seed,
         concurrency=concurrency,
         resume=resume,

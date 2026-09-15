@@ -145,8 +145,8 @@ Omniscience index = 100 × (correct − incorrect) / total. Declining costs noth
 ### Exa Agent (standalone, no Baseten model)
 
 Run 2026-09-15 with `bench-exa-agent`, same questions (seed 0), same system prompt and grader.
-Effort is Exa's fixed-price tier; cost is `costDollars` summed over the run. Reference cells
-from the tables above are repeated for comparison.
+Effort is Exa's fixed-price tier; cost is `costDollars` summed over the run. Raw rows are in
+`results/` (LFS). Reference cells from the tables above are repeated for comparison.
 
 #### SimpleQA-Verified (1000 questions)
 
