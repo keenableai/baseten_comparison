@@ -29,6 +29,9 @@ MODEL_PRICES = {
     "zai-org/GLM-5.3-Fast": (2.10, 6.60),
     "openai/gpt-oss-120b": (0.10, 0.50),
     "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": (0.60, 2.40),
+    # Vendor list prices, Sep 2026 (bench-native).
+    "claude-sonnet-5": (2.00, 10.00),
+    "gpt-5.6-terra": (2.00, 12.00),
 }
 
 SEARCH_PRICES_PER_1K = {
@@ -39,6 +42,14 @@ SEARCH_PRICES_PER_1K = {
     "baseten__parallel__web_search": 5.00,
     "baseten__youcom__you-search": 5.00,
     "baseten__youcom__you-contents": 1.00,
+    # Vendor-native tools (bench-native): only searches are billed; fetch/open_page are free.
+    "anthropic__web_search": 10.00,
+    "anthropic__web_fetch": 0.0,
+    "openai__search": 10.00,
+    "openai__open_page": 0.0,
+    "openai__find_in_page": 0.0,
+    # ~1% of web_search_call items arrive with no action; billed as a search (upper bound).
+    "openai__unknown": 10.00,
 }
 
 
