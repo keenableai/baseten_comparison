@@ -68,8 +68,8 @@ counts, so `search_calls` is null and `cost.model_usd` holds the per-run price.
 $2/$12. Both vendors bill $10 per 1k searches; Anthropic `web_fetch` and OpenAI `open_page` /
 `find_in_page` cost tokens only; the ~1% of OpenAI `web_search_call` items that carry no action are
 counted as searches. `--effort` maps to Anthropic `output_config.effort` with adaptive
-thinking, and to OpenAI `reasoning.effort`. Cached input tokens are billed at the full input rate in
-the table, so model cost is an upper bound.
+thinking, and to OpenAI `reasoning.effort`. Cache reads bill at $0.20/M and cache writes at $2.50/M
+on both; Anthropic reports them outside `input_tokens`, OpenAI inside, and the runner normalises both.
 
 ## Single call
 
@@ -269,8 +269,8 @@ in `results/` (LFS).
 | Correct / Incorrect / Not attempted | 965 / 34 / 1 | 942 / 53 / 5 | 963 / 36 / 1 | 975 / 25 / 0 |
 | Search calls (search + fetch) | 1057 + 35 | 2500 + 244 | n/a | 1394 + 85 |
 | Search cost | $10.57 | $25.00 | n/a | $5.92 |
-| Model cost | $22.54 | $91.63 | n/a | $16.68 |
-| Model + search cost | $33.11 | $116.63 | $100.00 | $22.60 |
+| Model cost | $14.61 | $91.63 | n/a | $16.68 |
+| Model + search cost | $25.18 | $116.63 | $100.00 | $22.60 |
 | Answer latency p50 / p90 | 4.6s / 6.9s | 17.0s / 25.9s | 13.6s / 22.4s | 3.1s / 5.0s |
 
 #### AA-Omniscience (600 questions)
@@ -283,8 +283,8 @@ in `results/` (LFS).
 | Accuracy on attempted | 90.8% | 85.8% | 89.1% | 90.6% |
 | Search calls (search + fetch) | 791 + 113 | 2503 + 578 | n/a | 2243 + 457 |
 | Search cost | $7.91 | $25.03 | n/a | $10.80 |
-| Model cost | $19.30 | $133.10 | n/a | $4.85 |
-| Model + search cost | $27.21 | $158.13 | $60.00 | $15.65 |
+| Model cost | $14.54 | $133.10 | n/a | $4.85 |
+| Model + search cost | $22.45 | $158.13 | $60.00 | $15.65 |
 | Answer latency p50 / p90 | 5.3s / 12.9s | 18.0s / 82.8s | 17.9s / 35.9s | 5.6s / 30.1s |
 
 | Domain (correct / index) | gpt-5.6-terra | Sonnet 5 |
@@ -298,7 +298,8 @@ in `results/` (LFS).
 
 gpt-5.6-terra fetch counts are `open_page` + `find_in_page` (96 + 17 on Omniscience, 32 + 3 on
 SimpleQA); the search count includes 9 Omniscience `web_search_call` items that carried no action.
-No run had an API error.
+42% of gpt-5.6-terra's SimpleQA input tokens and 30% on Omniscience were cache reads; Sonnet 5 had
+none. No run had an API error.
 
 Sonnet 5's model cost is dominated by input tokens: each server-tool round trip re-reads the whole
 context, so a 25-search answer bills ~65M input tokens per 600 questions. Six Sonnet 5 Omniscience
