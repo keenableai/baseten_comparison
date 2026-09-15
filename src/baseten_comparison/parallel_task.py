@@ -59,16 +59,13 @@ class ParallelTask:
 
     def _result(self, run_id: str, start: float) -> dict:
         while True:
-            if time.perf_counter() - start > MAX_RUN_S:
+            remaining = MAX_RUN_S - (time.perf_counter() - start)
+            if remaining <= 0:
                 raise TimeoutError(f"run {run_id} still active after {MAX_RUN_S:.0f}s")
             try:
-                resp = self._request(
-                    "GET",
+                resp = self.http.get(
                     f"/v1/tasks/runs/{run_id}/result",
-                    params={"timeout": RESULT_WAIT_S},
-                    retry_on=range(500, 600),
-                    attempts=6,
-                    raw=True,
+                    params={"timeout": int(min(RESULT_WAIT_S, remaining))},
                 )
             except httpx.TransportError:
                 # Long-held connection dropped mid-wait; the run keeps going server-side.
@@ -76,20 +73,21 @@ class ParallelTask:
                 continue
             if resp.status_code == 408:
                 continue
+            if resp.status_code >= 500:
+                time.sleep(2.0)
+                continue
             if resp.status_code == 404:
                 run = self.http.get(f"/v1/tasks/runs/{run_id}").json()
                 raise RuntimeError(f"run {run_id} {run.get('status')}: {run.get('error')}")
             resp.raise_for_status()
             return resp.json()
 
-    def _request(self, method: str, path: str, *, retry_on, attempts: int, raw=False, **kwargs):
+    def _request(self, method: str, path: str, *, retry_on, attempts: int, **kwargs) -> dict:
         for attempt in range(attempts):
             resp = self.http.request(method, path, **kwargs)
             if resp.status_code not in retry_on or attempt == attempts - 1:
                 break
             time.sleep(min(30.0, 2.0**attempt))
-        if raw:
-            return resp
         resp.raise_for_status()
         return resp.json()
 
