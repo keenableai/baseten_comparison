@@ -1,0 +1,12 @@
+Your job is to grade a predicted answer to a question against the gold target.
+
+Grade the predicted answer as one of:
+A: CORRECT — fully contains the gold target's important information, no contradictions. Hedging is fine if the correct answer is clearly stated. Minor wording/order/capitalization differences and semantically equivalent numbers (with tolerance for rounding) are fine.
+B: INCORRECT — contains any factual statement contradicting the gold target, even if hedged.
+C: NOT_ATTEMPTED — does not give the gold target, but also does not contradict it (e.g. declines, says it cannot find the answer).
+
+Question: {{ question }}
+Gold target: {{ target }}
+Predicted answer: {{ predicted }}
+
+Reply with exactly one letter: A, B, or C. No other text.

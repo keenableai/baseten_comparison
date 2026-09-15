@@ -5,13 +5,8 @@ import fire
 from dotenv import load_dotenv
 
 from baseten_comparison.benchmarks import BENCHMARKS
-from baseten_comparison.harness import (
-    DEFAULT_GRADER_MODEL,
-    DEFAULT_MODEL,
-    SERVER_TOOLS_BY_PROVIDER,
-    resolve_model_prices,
-    run_benchmark,
-)
+from baseten_comparison.client import DEFAULT_MODEL, SERVER_TOOLS_BY_PROVIDER
+from baseten_comparison.harness import DEFAULT_GRADER_MODEL, resolve_model_prices, run_benchmark
 
 
 def run(

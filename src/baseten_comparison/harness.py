@@ -4,50 +4,16 @@ import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 import httpx
-from anthropic import Anthropic
 
 from baseten_comparison.benchmarks import Benchmark
+from baseten_comparison.client import answer_question, make_client, system_prompt
+from baseten_comparison.prompts import render
 
-DEFAULT_BASE_URL = "https://inference.baseten.co"
-DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_GRADER_MODEL = "openai/gpt-5.5"
-
-SERVER_TOOLS_BY_PROVIDER = {
-    "exa": ["baseten__exa__web_search_exa", "baseten__exa__web_fetch_exa"],
-    "keenable": ["baseten__keenable__search_web_pages", "baseten__keenable__fetch_page_content"],
-    "parallel": ["baseten__parallel__web_search"],
-    "youcom": ["baseten__youcom__you-search", "baseten__youcom__you-contents"],
-}
-SERVER_TOOLS_BY_PROVIDER["all"] = [t for ts in SERVER_TOOLS_BY_PROVIDER.values() for t in ts]
-
-SYSTEM = (
-    "You are a precise assistant with web search. "
-    f"Today is {date.today().isoformat()}. "
-    "Search the web to verify facts before answering. "
-    "Answer in terse TL;DR style: lead with the answer, no filler."
-)
-
-GRADER_TEMPLATE = """\
-Your job is to grade a predicted answer to a question against the gold target.
-
-Grade the predicted answer as one of:
-A: CORRECT — fully contains the gold target's important information, no contradictions. \
-Hedging is fine if the correct answer is clearly stated. Minor wording/order/capitalization \
-differences and semantically equivalent numbers (with tolerance for rounding) are fine.
-B: INCORRECT — contains any factual statement contradicting the gold target, even if hedged.
-C: NOT_ATTEMPTED — does not give the gold target, but also does not contradict it \
-(e.g. declines, says it cannot find the answer).
-
-Question: {question}
-Gold target: {target}
-Predicted answer: {predicted}
-
-Reply with exactly one letter: A, B, or C. No other text.
-"""
 
 GRADE_NAMES = {"A": "CORRECT", "B": "INCORRECT", "C": "NOT_ATTEMPTED"}
 ERROR_GRADES = ("ERROR", "GRADER_ERROR")
@@ -97,33 +63,6 @@ def resolve_model_prices(
     return in_price, out_price
 
 
-def make_client(api_key: str) -> Anthropic:
-    return Anthropic(
-        api_key=api_key,
-        base_url=os.environ.get("BASETEN_BASE_URL", DEFAULT_BASE_URL),
-        default_headers={"Authorization": f"Bearer {api_key}", "x-baseten-server-tools": "true"},
-        timeout=180.0,
-        max_retries=8,
-    )
-
-
-def answer_question(
-    client: Anthropic, model: str, server_tools: list[str], system: str, question: str
-) -> tuple[str, dict, float]:
-    start = time.perf_counter()
-    final = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=system,
-        tools=[{"type": t} for t in server_tools],
-        extra_body={"thinking": {"type": "enabled", "budget_tokens": 1024}},
-        messages=[{"role": "user", "content": question}],
-    )
-    latency = time.perf_counter() - start
-    predicted = "\n".join(b.text for b in final.content if b.type == "text").strip()
-    return predicted, final.model_dump(mode="json", warnings=False), latency
-
-
 def parse_grade(content: str) -> str:
     return GRADE_NAMES.get(content.strip().rstrip("."), "GRADER_ERROR")
 
@@ -139,8 +78,8 @@ def grade_answer(
             "messages": [
                 {
                     "role": "user",
-                    "content": GRADER_TEMPLATE.format(
-                        question=question, target=target, predicted=predicted
+                    "content": render(
+                        "grader", question=question, target=target, predicted=predicted
                     ),
                 }
             ],
@@ -186,8 +125,7 @@ def run_benchmark(
     model_prices: tuple[float, float] | None,
     resume: bool,
 ) -> None:
-    server_tools = SERVER_TOOLS_BY_PROVIDER[provider]
-    system = SYSTEM + benchmark.system_suffix
+    system = system_prompt(benchmark.system_suffix)
     run_meta = {
         "benchmark": benchmark.name,
         "provider": provider,
@@ -228,7 +166,7 @@ def run_benchmark(
         total_start = time.perf_counter()
         try:
             predicted, model_resp, answer_s = answer_question(
-                client, model, server_tools, system, question
+                client, model, provider, question, system
             )
             usage = model_resp.get("usage") or {}
             calls = count_search_calls(model_resp.get("content") or [])

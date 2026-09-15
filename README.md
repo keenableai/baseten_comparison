@@ -39,6 +39,20 @@ Per-token model prices and per-call search prices live in `src/baseten_compariso
 
 Pass `--model_input_price` / `--model_output_price` to override the table for one run.
 
+## Single call
+
+```python
+import os
+from baseten_comparison.client import answer_question, make_client
+
+client = make_client(os.environ["BASETEN_API_KEY"])
+predicted, response, latency_s = answer_question(
+    client, "zai-org/GLM-5.3-Fast", "keenable", "Who wrote Ys Origin's soundtrack?"
+)
+```
+
+Prompts live in `src/baseten_comparison/prompts/*.jinja`.
+
 ## CLI flags
 
 `uv run bench -- --help` lists them. `--resume` keeps rows whose question, benchmark, provider,
