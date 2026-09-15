@@ -7,11 +7,16 @@ search; GPT-5.5 (via OpenRouter) grades the answer against the gold target.
 `bench-exa-agent` runs the same benchmarks against [Exa Agent](https://exa.ai/docs/reference/agent-api-guide)
 directly (api.exa.ai, no Baseten model) with the same system prompt and grader.
 
+`bench-native` runs them against a vendor's own model and built-in search tools: Anthropic
+(`claude-sonnet-5` with `web_search` + `web_fetch`) or OpenAI (`gpt-5.6-terra` with `web_search`,
+whose `open_page` action fetches pages). Same system prompt and grader.
+
 ## Setup
 
 ```bash
 uv sync
-cp .env.example .env   # then fill in BASETEN_API_KEY, OPENROUTER_API_KEY (and EXA_API_KEY for Exa Agent)
+cp .env.example .env   # then fill in BASETEN_API_KEY, OPENROUTER_API_KEY (and EXA_API_KEY for Exa Agent,
+                       # ANTHROPIC_API_KEY / OPENAI_API_KEY for bench-native)
 ```
 
 ## Run
@@ -22,6 +27,9 @@ uv run bench omniscience --n 600 --provider exa --model deepseek-ai/DeepSeek-V4-
 uv run bench -- --help
 uv run bench-exa-agent simpleqa --n 1000 --effort low --concurrency 8
 uv run bench-exa-agent -- --help
+uv run bench-native simpleqa anthropic --n 1000 --effort medium --concurrency 8
+uv run bench-native omniscience openai --n 600 --effort medium --concurrency 8
+uv run bench-native -- --help
 ```
 
 Output is one JSONL row per question (`results/<benchmark>_<provider>_<model>.jsonl` by default, tracked with git LFS) with the
@@ -47,6 +55,13 @@ Pass `--model_input_price` / `--model_output_price` to override the table for on
 Exa Agent has a fixed price per request by `--effort` (low $0.025, medium $0.10, high $0.50; Sep 2026).
 The harness records `costDollars` as returned by the API; `usage.searches` and compute units are the
 tier's nominal allocation, not the work actually done, so they are constant per request.
+
+`bench-native` uses vendor list prices, Sep 2026: Sonnet 5 $2/$10 per M tokens, gpt-5.6-terra
+$2/$12. Both vendors bill $10 per 1k searches; Anthropic `web_fetch` and OpenAI `open_page` /
+`find_in_page` cost tokens only; the ~1% of OpenAI `web_search_call` items that carry no action are
+counted as searches. `--effort` maps to Anthropic `output_config.effort` with adaptive
+thinking, and to OpenAI `reasoning.effort`. Cached input tokens are billed at the full input rate in
+the table, so model cost is an upper bound.
 
 ## Single call
 
@@ -188,3 +203,50 @@ Exa returned 500s for about 15% of medium-tier requests during one window on 202
 were rerun with `--resume`. Low and high had no agent errors. One high-tier Omniscience row is
 `GRADER_ERROR` in the raw data: GPT-5.5's content filter refused the grading prompt. The answer
 (72) matches the target; it is not counted as correct above.
+
+### Vendor-native search (Sonnet 5, gpt-5.6-terra)
+
+Run 2026-09-15 with `bench-native --effort medium`, same questions (seed 0), same system prompt and
+grader. Sonnet 5 uses Anthropic's `web_search` + `web_fetch` server tools with adaptive thinking;
+gpt-5.6-terra uses OpenAI's `web_search` tool (its `open_page` action is the fetch) with reasoning
+effort medium. Cost is model tokens + billed searches at the vendor list prices above. Raw rows are
+in `results/` (LFS). Sonnet 5 cells are pending; the runs are in progress.
+
+#### SimpleQA-Verified (1000 questions)
+
+| | gpt-5.6-terra | Sonnet 5 | Exa Agent medium | Keenable + GLM-5.3-Fast |
+| --- | --- | --- | --- | --- |
+| Accuracy | **96.5%** | pending | **96.3%** | **97.5%** |
+| Correct / Incorrect / Not attempted | 965 / 34 / 1 | pending | 963 / 36 / 1 | 975 / 25 / 0 |
+| Search calls (search + fetch) | 1057 + 35 | pending | n/a | 1394 + 85 |
+| Search cost | $10.57 | pending | n/a | $5.92 |
+| Model cost | $22.54 | pending | n/a | $16.68 |
+| Model + search cost | $33.11 | pending | $100.00 | $22.60 |
+| Answer latency p50 / p90 | 4.6s / 6.9s | pending | 13.6s / 22.4s | 3.1s / 5.0s |
+
+#### AA-Omniscience (600 questions)
+
+| | gpt-5.6-terra | Sonnet 5 | Exa Agent medium | Keenable + V4.1-Flash |
+| --- | --- | --- | --- | --- |
+| Omniscience index | **+81.3** | pending | **+78.0** | **+76.2** |
+| Accuracy | 90.5% | pending | 88.8% | 85.0% |
+| Correct / Incorrect / Not attempted | 543 / 55 / 2 | pending | 533 / 65 / 2 | 510 / 53 / 37 |
+| Accuracy on attempted | 90.8% | pending | 89.1% | 90.6% |
+| Search calls (search + fetch) | 791 + 113 | pending | n/a | 2243 + 457 |
+| Search cost | $7.91 | pending | n/a | $10.80 |
+| Model cost | $19.30 | pending | n/a | $4.85 |
+| Model + search cost | $27.21 | pending | $60.00 | $15.65 |
+| Answer latency p50 / p90 | 5.3s / 12.9s | pending | 17.9s / 35.9s | 5.6s / 30.1s |
+
+| Domain (correct / index) | gpt-5.6-terra | Sonnet 5 |
+| --- | --- | --- |
+| Finance | 86 / +74 | pending |
+| Health | 82 / +64 | pending |
+| Humanities and Social Sciences | 94 / +88 | pending |
+| Law | 97 / +94 | pending |
+| Science, Engineering and Mathematics | 88 / +76 | pending |
+| Software Engineering | 96 / +92 | pending |
+
+gpt-5.6-terra fetch counts are `open_page` + `find_in_page` (96 + 17 on Omniscience, 32 + 3 on
+SimpleQA); the search count includes 9 Omniscience `web_search_call` items that carried no action.
+Neither gpt-5.6-terra run had an API error.
