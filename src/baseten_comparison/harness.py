@@ -55,10 +55,12 @@ ERROR_GRADES = ("ERROR", "GRADER_ERROR")
 MODEL_PRICES = {
     "deepseek-ai/DeepSeek-V4-Pro": (1.74, 3.48),
     "deepseek-ai/DeepSeek-V4-Flash-0731": (0.14, 0.28),
+    "deepseek-ai/DeepSeek-V4.1-Flash": (0.30, 1.20),
     "moonshotai/Kimi-K3": (3.00, 15.00),
     "moonshotai/Kimi-K2.6": (0.95, 4.00),
     "zai-org/GLM-5.2": (1.40, 4.40),
     "zai-org/GLM-5.2-Fast": (2.10, 6.60),
+    "zai-org/GLM-5.3-Fast": (2.10, 6.60),
     "openai/gpt-oss-120b": (0.10, 0.50),
     "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": (0.60, 2.40),
 }
