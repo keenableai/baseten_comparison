@@ -9,11 +9,16 @@ directly (api.exa.ai, no Baseten model) with the same system prompt and grader. 
 does the same against the [Parallel Task API](https://docs.parallel.ai/task-api/task-quickstart)
 (api.parallel.ai); the Task API has no system prompt, so the prompt goes in as the text output schema.
 
+`bench-native` runs them against a vendor's own model and built-in search tools: Anthropic
+(`claude-sonnet-5` with `web_search` + `web_fetch`) or OpenAI (`gpt-5.6-terra` with `web_search`,
+whose `open_page` action fetches pages). Same system prompt and grader.
+
 ## Setup
 
 ```bash
 uv sync
-cp .env.example .env   # then fill in BASETEN_API_KEY, OPENROUTER_API_KEY (EXA_API_KEY / PARALLEL_API_KEY for the agent runners)
+cp .env.example .env   # then fill in BASETEN_API_KEY, OPENROUTER_API_KEY (and EXA_API_KEY / PARALLEL_API_KEY
+                       # for the agent runners, ANTHROPIC_API_KEY / OPENAI_API_KEY for bench-native)
 ```
 
 ## Run
@@ -26,6 +31,9 @@ uv run bench-exa-agent simpleqa --n 1000 --effort low --concurrency 8
 uv run bench-exa-agent -- --help
 uv run bench-parallel-task simpleqa --n 1000 --processor base --concurrency 20
 uv run bench-parallel-task -- --help
+uv run bench-native simpleqa anthropic --n 1000 --effort medium --concurrency 8
+uv run bench-native omniscience openai --n 600 --effort medium --concurrency 8
+uv run bench-native -- --help
 ```
 
 Output is one JSONL row per question (`results/<benchmark>_<provider>_<model>.jsonl` by default, tracked with git LFS) with the
@@ -55,6 +63,13 @@ tier's nominal allocation, not the work actually done, so they are constant per 
 Parallel Task has a fixed price per successful run by `--processor` (lite $0.005, base $0.01, core $0.025,
 core2x $0.05, pro $0.10, ultra $0.30; Sep 2026). Failed runs are not billed. The API reports no search
 counts, so `search_calls` is null and `cost.model_usd` holds the per-run price.
+
+`bench-native` uses vendor list prices, Sep 2026: Sonnet 5 $2/$10 per M tokens, gpt-5.6-terra
+$2/$12. Both vendors bill $10 per 1k searches; Anthropic `web_fetch` and OpenAI `open_page` /
+`find_in_page` cost tokens only; the ~1% of OpenAI `web_search_call` items that carry no action are
+counted as searches. `--effort` maps to Anthropic `output_config.effort` with adaptive
+thinking, and to OpenAI `reasoning.effort`. Cached input tokens are billed at the full input rate in
+the table, so model cost is an upper bound.
 
 ## Single call
 
@@ -237,3 +252,56 @@ Parallel Task almost never declines (5 of 600 not attempted), so on Omniscience 
 accuracy: about the same correct count as Keenable + V4.1-Flash, with roughly 1.7x the wrong answers.
 Runs had no agent errors apart from one dropped connection on the blocking result call (core,
 Omniscience), rerun with `--resume`; the runner now retries transport errors while a run is active.
+
+### Vendor-native search (Sonnet 5, gpt-5.6-terra)
+
+Run 2026-09-15 with `bench-native --effort medium`, same questions (seed 0), same system prompt and
+grader. Sonnet 5 uses Anthropic's `web_search` + `web_fetch` server tools with adaptive thinking;
+gpt-5.6-terra uses OpenAI's `web_search` tool (its `open_page` action is the fetch) with reasoning
+effort medium. Cost is model tokens + billed searches at the vendor list prices above. Raw rows are
+in `results/` (LFS).
+
+#### SimpleQA-Verified (1000 questions)
+
+| | gpt-5.6-terra | Sonnet 5 | Exa Agent medium | Keenable + GLM-5.3-Fast |
+| --- | --- | --- | --- | --- |
+| Accuracy | **96.5%** | **94.2%** | **96.3%** | **97.5%** |
+| Correct / Incorrect / Not attempted | 965 / 34 / 1 | 942 / 53 / 5 | 963 / 36 / 1 | 975 / 25 / 0 |
+| Search calls (search + fetch) | 1057 + 35 | 2500 + 244 | n/a | 1394 + 85 |
+| Search cost | $10.57 | $25.00 | n/a | $5.92 |
+| Model cost | $22.54 | $91.63 | n/a | $16.68 |
+| Model + search cost | $33.11 | $116.63 | $100.00 | $22.60 |
+| Answer latency p50 / p90 | 4.6s / 6.9s | 17.0s / 25.9s | 13.6s / 22.4s | 3.1s / 5.0s |
+
+#### AA-Omniscience (600 questions)
+
+| | gpt-5.6-terra | Sonnet 5 | Exa Agent medium | Keenable + V4.1-Flash |
+| --- | --- | --- | --- | --- |
+| Omniscience index | **+81.3** | **+69.2** | **+78.0** | **+76.2** |
+| Accuracy | 90.5% | 82.8% | 88.8% | 85.0% |
+| Correct / Incorrect / Not attempted | 543 / 55 / 2 | 497 / 82 / 21 | 533 / 65 / 2 | 510 / 53 / 37 |
+| Accuracy on attempted | 90.8% | 85.8% | 89.1% | 90.6% |
+| Search calls (search + fetch) | 791 + 113 | 2503 + 578 | n/a | 2243 + 457 |
+| Search cost | $7.91 | $25.03 | n/a | $10.80 |
+| Model cost | $19.30 | $133.10 | n/a | $4.85 |
+| Model + search cost | $27.21 | $158.13 | $60.00 | $15.65 |
+| Answer latency p50 / p90 | 5.3s / 12.9s | 18.0s / 82.8s | 17.9s / 35.9s | 5.6s / 30.1s |
+
+| Domain (correct / index) | gpt-5.6-terra | Sonnet 5 |
+| --- | --- | --- |
+| Finance | 86 / +74 | 83 / +71 |
+| Health | 82 / +64 | 74 / +50 |
+| Humanities and Social Sciences | 94 / +88 | 77 / +61 |
+| Law | 97 / +94 | 91 / +84 |
+| Science, Engineering and Mathematics | 88 / +76 | 79 / +63 |
+| Software Engineering | 96 / +92 | 93 / +86 |
+
+gpt-5.6-terra fetch counts are `open_page` + `find_in_page` (96 + 17 on Omniscience, 32 + 3 on
+SimpleQA); the search count includes 9 Omniscience `web_search_call` items that carried no action.
+No run had an API error.
+
+Sonnet 5's model cost is dominated by input tokens: each server-tool round trip re-reads the whole
+context, so a 25-search answer bills ~65M input tokens per 600 questions. Six Sonnet 5 Omniscience
+rows were rerun: four stopped with `pause_turn` (Anthropic pauses long tool loops and expects the
+client to resend the turn, which the runner now does) and two spent the whole 8192-token output cap
+on thinking (the cap is now 16384). One SimpleQA row spent 32 minutes in SDK retries before answering.
