@@ -132,12 +132,3 @@ Omniscience index = 100 × (correct − incorrect) / total. Declining costs noth
 | Law | 95 / +94 | 99 / +98 | 93 / +88 | 96 / +92 |
 | Science, Engineering and Mathematics | 75 / +65 | 72 / +56 | 81 / +66 | 77 / +55 |
 | Software Engineering | 93 / +89 | 96 / +93 | 92 / +85 | 97 / +94 |
-
-### Notes
-
-- SimpleQA: Keenable leads by 3 correct on V4.1-Flash and 8 on GLM-5.3-Fast. Keenable is 2-3s faster at p50 and 30% cheaper on search.
-- Omniscience: Exa leads by 1-2 index points. The gap comes from fewer declines (22 vs 37, 5 vs 12), not from better accuracy on attempted questions, which is within 1 point either way.
-- Keenable makes 15-30% more searches and 1.7-2.5x more fetches, yet still costs less per run on SimpleQA and about the same on Omniscience.
-- Exa is 1.5-3x slower at p50 across all four cells. GLM on Exa Omniscience had one 1210s outlier.
-- V4.1-Flash misspelled the Keenable tool name in ~15 calls per run; those are excluded from counts and search cost.
-- Baseten returned 429s on the V4.1-Flash runs; resume passes at lower concurrency filled every row. All cells have zero errors.
