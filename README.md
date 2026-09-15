@@ -4,11 +4,14 @@ Compare web-search providers exposed as Baseten server tools (Keenable, Exa, Par
 on SimpleQA-Verified and AA-Omniscience. A Baseten-hosted model answers each question with
 search; GPT-5.5 (via OpenRouter) grades the answer against the gold target.
 
+`bench-exa-agent` runs the same benchmarks against [Exa Agent](https://exa.ai/docs/reference/agent-api-guide)
+directly (api.exa.ai, no Baseten model) with the same system prompt and grader.
+
 ## Setup
 
 ```bash
 uv sync
-cp .env.example .env   # then fill in BASETEN_API_KEY and OPENROUTER_API_KEY
+cp .env.example .env   # then fill in BASETEN_API_KEY, OPENROUTER_API_KEY (and EXA_API_KEY for Exa Agent)
 ```
 
 ## Run
@@ -17,6 +20,8 @@ cp .env.example .env   # then fill in BASETEN_API_KEY and OPENROUTER_API_KEY
 uv run bench simpleqa --n 1000 --provider keenable --model deepseek-ai/DeepSeek-V4-Pro --concurrency 3
 uv run bench omniscience --n 600 --provider exa --model deepseek-ai/DeepSeek-V4-Flash-0731 --concurrency 3
 uv run bench -- --help
+uv run bench-exa-agent simpleqa --n 1000 --effort low --concurrency 8
+uv run bench-exa-agent -- --help
 ```
 
 Output is one JSONL row per question (`<benchmark>_<provider>_<model>.jsonl` by default) with the
@@ -38,6 +43,10 @@ Per-token model prices and per-call search prices live in `src/baseten_compariso
   per-request price; $4/1k is an internal figure applied to search and fetch.
 
 Pass `--model_input_price` / `--model_output_price` to override the table for one run.
+
+Exa Agent has a fixed price per request by `--effort` (low $0.025, medium $0.10, high $0.50; Sep 2026).
+The harness records `costDollars` as returned by the API; `usage.searches` and compute units are the
+tier's nominal allocation, not the work actually done, so they are constant per request.
 
 ## Single call
 
@@ -132,3 +141,43 @@ Omniscience index = 100 × (correct − incorrect) / total. Declining costs noth
 | Law | 95 / +94 | 99 / +98 | 93 / +88 | 96 / +92 |
 | Science, Engineering and Mathematics | 75 / +65 | 72 / +56 | 81 / +66 | 77 / +55 |
 | Software Engineering | 93 / +89 | 96 / +93 | 92 / +85 | 97 / +94 |
+
+### Exa Agent (standalone, no Baseten model)
+
+Run 2026-09-15 with `bench-exa-agent`, same questions (seed 0), same system prompt and grader.
+Effort is Exa's fixed-price tier; cost is `costDollars` summed over the run. Reference cells
+from the tables above are repeated for comparison.
+
+#### SimpleQA-Verified (1000 questions)
+
+| | Exa Agent low | Exa Agent medium | Exa Agent high | Keenable + GLM-5.3-Fast | Exa + GLM-5.3-Fast |
+| --- | --- | --- | --- | --- | --- |
+| Accuracy | **97.0%** | **96.3%** | **96.8%** | **97.5%** | **96.7%** |
+| Correct / Incorrect / Not attempted | 970 / 29 / 1 | 963 / 36 / 1 | 968 / 31 / 1 | 975 / 25 / 0 | 967 / 33 / 0 |
+| Cost | $25.00 | $100.00 | $500.00 | $22.60 | $22.95 |
+| Answer latency p50 / p90 | 9.1s / 15.7s | 13.6s / 22.4s | 11.4s / 18.1s | 3.1s / 5.0s | 6.2s / 16.1s |
+
+#### AA-Omniscience (600 questions)
+
+| | Exa Agent low | Exa Agent medium | Exa Agent high | Keenable + V4.1-Flash | Exa + V4.1-Flash |
+| --- | --- | --- | --- | --- | --- |
+| Omniscience index | **+73.0** | **+78.0** | **+80.8** | **+76.2** | **+77.0** |
+| Accuracy | 86.2% | 88.8% | 90.2% | 85.0% | 86.7% |
+| Correct / Incorrect / Not attempted | 517 / 79 / 4 | 533 / 65 / 2 | 541 / 56 / 2 | 510 / 53 / 37 | 520 / 58 / 22 |
+| Accuracy on attempted | 86.7% | 89.1% | 90.6% | 90.6% | 90.0% |
+| Cost | $15.00 | $60.00 | $300.00 | $15.65 | $19.82 |
+| Answer latency p50 / p90 | 11.3s / 20.3s | 17.9s / 35.9s | 15.8s / 51.4s | 5.6s / 30.1s | 8.3s / 36.1s |
+
+| Domain (correct / index) | Exa Agent low | Exa Agent medium | Exa Agent high |
+| --- | --- | --- | --- |
+| Finance | 90 / +80 | 93 / +86 | 92 / +85 |
+| Health | 78 / +57 | 80 / +60 | 87 / +75 |
+| Humanities and Social Sciences | 85 / +70 | 89 / +79 | 85 / +71 |
+| Law | 94 / +89 | 94 / +89 | 98 / +96 |
+| Science, Engineering and Mathematics | 72 / +46 | 78 / +56 | 80 / +60 |
+| Software Engineering | 98 / +96 | 99 / +98 | 99 / +98 |
+
+Exa returned 500s for about 15% of medium-tier requests during one window on 2026-09-15; those rows
+were rerun with `--resume`. Low and high had no agent errors. One high-tier Omniscience row is
+`GRADER_ERROR` in the raw data: GPT-5.5's content filter refused the grading prompt. The answer
+(72) matches the target; it is not counted as correct above.

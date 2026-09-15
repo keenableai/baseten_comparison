@@ -55,7 +55,12 @@ class ExaAgent:
         return resp.json()
 
     def _get(self, run_id: str) -> dict:
-        resp = self.http.get(f"/agent/runs/{run_id}")
+        # Polling hits transient 500s; the run keeps going server-side, so just retry.
+        for attempt in range(6):
+            resp = self.http.get(f"/agent/runs/{run_id}")
+            if resp.status_code < 500:
+                break
+            time.sleep(min(30.0, 2.0**attempt))
         resp.raise_for_status()
         return resp.json()
 
