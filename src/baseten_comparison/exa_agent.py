@@ -19,7 +19,10 @@ from baseten_comparison.harness import DEFAULT_GRADER_MODEL, grade_answer, load_
 
 EXA_URL = "https://api.exa.ai"
 PROVIDER = "exa-agent"
+# Fixed-price tiers only; auto/max are metered up to $5/$20 per request.
+EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
 POLL_INTERVAL_S = 2.0
+MAX_RUN_S = 900.0
 
 
 class ExaAgent:
@@ -35,6 +38,8 @@ class ExaAgent:
         start = time.perf_counter()
         run = self._create(question, system)
         while run["status"] in ("queued", "running"):
+            if time.perf_counter() - start > MAX_RUN_S:
+                raise TimeoutError(f"run {run['id']} still {run['status']} after {MAX_RUN_S:.0f}s")
             time.sleep(POLL_INTERVAL_S)
             run = self._get(run["id"])
         latency = time.perf_counter() - start
@@ -46,19 +51,16 @@ class ExaAgent:
     def _create(self, question: str, system: str) -> dict:
         body = {"query": question, "systemPrompt": system, "effort": self.effort}
         # 429 = CONCURRENCY_LIMIT_REACHED; slots only free up as runs finish, so wait and retry.
-        for attempt in range(12):
-            resp = self.http.post("/agent/runs", json=body)
-            if resp.status_code != 429:
-                break
-            time.sleep(min(30.0, 2.0**attempt))
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", "/agent/runs", json=body, retry_on=(429,), attempts=12)
 
     def _get(self, run_id: str) -> dict:
         # Polling hits transient 500s; the run keeps going server-side, so just retry.
-        for attempt in range(6):
-            resp = self.http.get(f"/agent/runs/{run_id}")
-            if resp.status_code < 500:
+        return self._request("GET", f"/agent/runs/{run_id}", retry_on=range(500, 600), attempts=6)
+
+    def _request(self, method: str, path: str, *, retry_on, attempts: int, **kwargs) -> dict:
+        for attempt in range(attempts):
+            resp = self.http.request(method, path, **kwargs)
+            if resp.status_code not in retry_on or attempt == attempts - 1:
                 break
             time.sleep(min(30.0, 2.0**attempt))
         resp.raise_for_status()
@@ -85,7 +87,9 @@ def run_benchmark(
     }
 
     samples = benchmark.load(n, seed)
+    current = {s["question"] for s in samples}
     done = load_kept_rows(output, run_meta) if resume else {}
+    done = {q: r for q, r in done.items() if q in current}
     todo = [(i, s) for i, s in enumerate(samples) if s["question"] not in done]
     print(f"{len(done)} rows kept, {len(todo)} to run")
 
@@ -199,6 +203,8 @@ def run(
     load_dotenv()
     if benchmark not in BENCHMARKS:
         sys.exit(f"unknown benchmark {benchmark!r}; choose from {sorted(BENCHMARKS)}")
+    if effort not in EFFORTS:
+        sys.exit(f"unknown effort {effort!r}; choose from {EFFORTS}")
     for var in ("EXA_API_KEY", "OPENROUTER_API_KEY"):
         if not os.environ.get(var):
             sys.exit(f"export {var} first")
