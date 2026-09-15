@@ -36,7 +36,8 @@ def run(
 
     model = model or os.environ.get("BASETEN_MODEL") or DEFAULT_MODEL
     model_prices = resolve_model_prices(model, model_input_price, model_output_price)
-    output = output or f"{benchmark}_{provider}_{model.replace('/', '_')}.jsonl"
+    output = output or f"results/{benchmark}_{provider}_{model.replace('/', '_')}.jsonl"
+    os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
 
     run_benchmark(
         BENCHMARKS[benchmark],
