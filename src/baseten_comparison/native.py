@@ -29,7 +29,9 @@ DEFAULT_MODELS = {"anthropic": "claude-sonnet-5", "openai": "gpt-5.6-terra"}
 API_KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 EFFORTS = ("low", "medium", "high")
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
-MAX_OUTPUT_TOKENS = 8192
+MAX_OUTPUT_TOKENS = 16384
+# Long server-tool loops stop with pause_turn; resending the turn continues them.
+MAX_PAUSE_TURNS = 5
 
 
 class AnthropicNative:
@@ -39,28 +41,47 @@ class AnthropicNative:
 
     def answer(self, question: str, system: str) -> tuple[str, dict, float, Counter[str]]:
         start = time.perf_counter()
-        final = self.client.messages.create(
-            model=self.model,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            system=system,
-            thinking={"type": "adaptive"},
-            output_config={"effort": self.effort},
-            tools=[
-                {"type": "web_search_20260318", "name": "web_search"},
-                {"type": "web_fetch_20260318", "name": "web_fetch"},
-            ],
-            messages=[{"role": "user", "content": question}],
-        )
+        messages = [{"role": "user", "content": question}]
+        usage = Counter()
+        pause_turns = 0
+        while True:
+            final = self.client.messages.create(
+                model=self.model,
+                max_tokens=MAX_OUTPUT_TOKENS,
+                system=system,
+                thinking={"type": "adaptive"},
+                output_config={"effort": self.effort},
+                tools=[
+                    {"type": "web_search_20260318", "name": "web_search"},
+                    {"type": "web_fetch_20260318", "name": "web_fetch"},
+                ],
+                messages=messages,
+            )
+            server = final.usage.server_tool_use
+            usage.update(
+                input_tokens=final.usage.input_tokens,
+                output_tokens=final.usage.output_tokens,
+                web_search=server.web_search_requests if server else 0,
+                web_fetch=server.web_fetch_requests if server else 0,
+            )
+            if final.stop_reason != "pause_turn" or pause_turns == MAX_PAUSE_TURNS:
+                break
+            pause_turns += 1
+            messages = [*messages, {"role": "assistant", "content": final.content}]
         latency = time.perf_counter() - start
         predicted = "\n".join(b.text for b in final.content if b.type == "text").strip()
-        server = final.usage.server_tool_use
+        response = final.model_dump(mode="json", warnings=False)
+        response["usage"].update(
+            input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"]
+        )
+        response["pause_turns"] = pause_turns
         calls = Counter(
             {
-                "anthropic__web_search": server.web_search_requests if server else 0,
-                "anthropic__web_fetch": server.web_fetch_requests if server else 0,
+                "anthropic__web_search": usage["web_search"],
+                "anthropic__web_fetch": usage["web_fetch"],
             }
         )
-        return predicted, final.model_dump(mode="json", warnings=False), latency, calls
+        return predicted, response, latency, calls
 
 
 class OpenAINative:
