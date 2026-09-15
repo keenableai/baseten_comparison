@@ -34,6 +34,12 @@ MODEL_PRICES = {
     "gpt-5.6-terra": (2.00, 12.00),
 }
 
+# (cache read, cache write) $/M tokens for models whose usage reports them (bench-native).
+CACHE_PRICES = {
+    "claude-sonnet-5": (0.20, 2.50),
+    "gpt-5.6-terra": (0.20, 2.50),
+}
+
 SEARCH_PRICES_PER_1K = {
     "baseten__keenable__search_web_pages": 4.00,
     "baseten__keenable__fetch_page_content": 4.00,

@@ -1,26 +1,20 @@
 """Vendor-native web search + fetch: Anthropic and OpenAI APIs called directly, no Baseten."""
 
-import json
 import os
 import sys
-import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 
 import fire
 import httpx
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-from baseten_comparison.benchmarks import BENCHMARKS, Benchmark
-from baseten_comparison.client import system_prompt
+from baseten_comparison.agent_runner import AgentAnswer, run_agent_benchmark
+from baseten_comparison.benchmarks import BENCHMARKS
 from baseten_comparison.harness import (
+    CACHE_PRICES,
     DEFAULT_GRADER_MODEL,
-    grade_answer,
-    load_kept_rows,
-    print_summary,
     resolve_model_prices,
     search_cost,
 )
@@ -32,17 +26,60 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 MAX_OUTPUT_TOKENS = 16384
 # Long server-tool loops stop with pause_turn; resending the turn continues them.
 MAX_PAUSE_TURNS = 5
+ANTHROPIC_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def model_cost(model: str, prices: tuple[float, float] | None, tokens: dict) -> float | None:
+    """tokens: uncached input, cache_read, cache_write, output. Cache rates fall back to input."""
+    if prices is None:
+        return None
+    in_price, out_price = prices
+    read_price, write_price = CACHE_PRICES.get(model, (in_price, in_price))
+    return (
+        tokens["input"] * in_price
+        + tokens["cache_read"] * read_price
+        + tokens["cache_write"] * write_price
+        + tokens["output"] * out_price
+    ) / 1e6
+
+
+def anthropic_tokens(usage: dict) -> dict:
+    # input_tokens excludes cache reads and writes; they are reported separately.
+    return {
+        "input": usage["input_tokens"],
+        "cache_read": usage.get("cache_read_input_tokens") or 0,
+        "cache_write": usage.get("cache_creation_input_tokens") or 0,
+        "output": usage["output_tokens"],
+    }
+
+
+def openai_tokens(usage: dict) -> dict:
+    # input_tokens includes cache reads and writes; split them out.
+    details = usage.get("input_tokens_details") or {}
+    cache_read = details.get("cached_tokens", 0)
+    cache_write = details.get("cache_write_tokens", 0)
+    return {
+        "input": usage["input_tokens"] - cache_read - cache_write,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
+        "output": usage["output_tokens"],
+    }
 
 
 class AnthropicNative:
-    def __init__(self, api_key: str, model: str, effort: str) -> None:
-        self.model, self.effort = model, effort
+    def __init__(self, api_key: str, model: str, effort: str, prices) -> None:
+        self.model, self.effort, self.prices = model, effort, prices
         self.client = Anthropic(api_key=api_key, timeout=300.0, max_retries=8)
 
-    def answer(self, question: str, system: str) -> tuple[str, dict, float, Counter[str]]:
+    def answer(self, question: str, system: str) -> AgentAnswer:
         start = time.perf_counter()
         messages = [{"role": "user", "content": question}]
-        usage = Counter()
+        usage: Counter[str] = Counter()
         pause_turns = 0
         while True:
             final = self.client.messages.create(
@@ -57,39 +94,41 @@ class AnthropicNative:
                 ],
                 messages=messages,
             )
-            server = final.usage.server_tool_use
+            u = final.usage.model_dump(mode="json", warnings=False)
+            usage.update({k: u.get(k) or 0 for k in ANTHROPIC_USAGE_KEYS})
+            server = u.get("server_tool_use") or {}
             usage.update(
-                input_tokens=final.usage.input_tokens,
-                output_tokens=final.usage.output_tokens,
-                web_search=server.web_search_requests if server else 0,
-                web_fetch=server.web_fetch_requests if server else 0,
+                web_search=server.get("web_search_requests", 0),
+                web_fetch=server.get("web_fetch_requests", 0),
             )
             if final.stop_reason != "pause_turn" or pause_turns == MAX_PAUSE_TURNS:
                 break
             pause_turns += 1
             messages = [*messages, {"role": "assistant", "content": final.content}]
         latency = time.perf_counter() - start
-        predicted = "\n".join(b.text for b in final.content if b.type == "text").strip()
         response = final.model_dump(mode="json", warnings=False)
-        response["usage"].update(
-            input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"]
-        )
+        response["usage"].update({k: usage[k] for k in ANTHROPIC_USAGE_KEYS})
         response["pause_turns"] = pause_turns
-        calls = Counter(
-            {
-                "anthropic__web_search": usage["web_search"],
-                "anthropic__web_fetch": usage["web_fetch"],
-            }
+        calls = {
+            "anthropic__web_search": usage["web_search"],
+            "anthropic__web_fetch": usage["web_fetch"],
+        }
+        return AgentAnswer(
+            predicted="\n".join(b.text for b in final.content if b.type == "text").strip(),
+            response=response,
+            latency_s=latency,
+            model_usd=model_cost(self.model, self.prices, anthropic_tokens(response["usage"])),
+            search_usd=search_cost(calls),
+            search_calls=calls,
         )
-        return predicted, response, latency, calls
 
 
 class OpenAINative:
-    def __init__(self, api_key: str, model: str, effort: str) -> None:
-        self.model, self.effort = model, effort
+    def __init__(self, api_key: str, model: str, effort: str, prices) -> None:
+        self.model, self.effort, self.prices = model, effort, prices
         self.http = httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=300.0)
 
-    def answer(self, question: str, system: str) -> tuple[str, dict, float, Counter[str]]:
+    def answer(self, question: str, system: str) -> AgentAnswer:
         body = {
             "model": self.model,
             "reasoning": {"effort": self.effort},
@@ -126,109 +165,17 @@ class OpenAINative:
             for item in output
             if item.get("type") == "web_search_call"
         )
-        return predicted, response, latency, calls
+        return AgentAnswer(
+            predicted=predicted,
+            response=response,
+            latency_s=latency,
+            model_usd=model_cost(self.model, self.prices, openai_tokens(response["usage"])),
+            search_usd=search_cost(calls),
+            search_calls=dict(calls),
+        )
 
 
 CLIENTS = {"anthropic": AnthropicNative, "openai": OpenAINative}
-
-
-def run_benchmark(
-    benchmark: Benchmark,
-    n: int,
-    provider: str,
-    model: str,
-    effort: str,
-    grader_model: str,
-    output: str,
-    seed: int,
-    concurrency: int,
-    model_prices: tuple[float, float] | None,
-    resume: bool,
-) -> None:
-    system = system_prompt(benchmark.system_suffix)
-    run_meta = {
-        "benchmark": benchmark.name,
-        "provider": provider,
-        "model": model,
-        "effort": effort,
-        "grader_model": grader_model,
-    }
-
-    samples = benchmark.load(n, seed)
-    current = {s["question"] for s in samples}
-    done = load_kept_rows(output, run_meta) if resume else {}
-    done = {q: r for q, r in done.items() if q in current}
-    todo = [(i, s) for i, s in enumerate(samples) if s["question"] not in done]
-    print(f"{len(done)} rows kept, {len(todo)} to run")
-
-    agent = CLIENTS[provider](os.environ[API_KEYS[provider]], model, effort)
-    grader = httpx.Client(
-        headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}, timeout=180.0
-    )
-    write_lock = threading.Lock()
-
-    def process(idx_sample: tuple[int, dict]) -> dict:
-        idx, sample = idx_sample
-        question, target = sample["question"], sample["target"]
-        record = {
-            "index": idx,
-            "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "question": question,
-            "target": target,
-            "metadata": sample["metadata"],
-            **run_meta,
-            "predicted": None,
-            "grade": "ERROR",
-            "model_response": None,
-            "grader_response": None,
-            "latency": {"answer_s": None, "grade_s": None, "total_s": None},
-            "search_calls": None,
-            "cost": {"model_usd": None, "search_usd": None, "grader_usd": None},
-            "error": None,
-        }
-        total_start = time.perf_counter()
-        try:
-            predicted, model_resp, answer_s, calls = agent.answer(question, system)
-            usage = model_resp.get("usage") or {}
-            record.update(predicted=predicted, model_response=model_resp, search_calls=calls)
-            record["latency"]["answer_s"] = round(answer_s, 3)
-            record["cost"]["search_usd"] = search_cost(calls)
-            if model_prices:
-                in_price, out_price = model_prices
-                record["cost"]["model_usd"] = (
-                    usage.get("input_tokens", 0) * in_price
-                    + usage.get("output_tokens", 0) * out_price
-                ) / 1e6
-
-            grade, grader_resp, grade_s = grade_answer(
-                grader, grader_model, question, target, predicted
-            )
-            record.update(grade=grade, grader_response=grader_resp)
-            record["latency"]["grade_s"] = round(grade_s, 3)
-            record["cost"]["grader_usd"] = (grader_resp.get("usage") or {}).get("cost")
-        except Exception as exc:
-            record["error"] = f"{type(exc).__name__}: {exc}"
-        record["latency"]["total_s"] = round(time.perf_counter() - total_start, 3)
-        with write_lock:
-            out.write(json.dumps(record, ensure_ascii=False) + "\n")
-            out.flush()
-            print(
-                f"[{idx + 1}/{len(samples)}] {record['grade']} "
-                f"({record['latency']['total_s']}s): {question[:80]}"
-            )
-        return record
-
-    run_start = time.perf_counter()
-    with open(output, "w", encoding="utf-8") as out:
-        for rec in done.values():
-            out.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            records = [*done.values(), *pool.map(process, todo)]
-
-    print(f"\n{len(records)} samples → {output} in {time.perf_counter() - run_start:.0f}s wall")
-    print_summary(records)
-    if benchmark.extra_summary:
-        benchmark.extra_summary(records)
 
 
 def run(
@@ -259,23 +206,28 @@ def run(
         sys.exit("n and concurrency must be >= 1")
 
     model = model or DEFAULT_MODELS[provider]
-    model_prices = resolve_model_prices(model, model_input_price, model_output_price)
-    if model_prices is None:
+    prices = resolve_model_prices(model, model_input_price, model_output_price)
+    if prices is None:
         print(f"WARNING: no price for {model}; model cost will be null")
 
     output = output or f"results/{benchmark}_{provider}_{model.replace('/', '_')}_{effort}.jsonl"
     os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
-    run_benchmark(
+    agent = CLIENTS[provider](os.environ[API_KEYS[provider]], model, effort, prices)
+    run_agent_benchmark(
         BENCHMARKS[benchmark],
+        run_meta={
+            "benchmark": benchmark,
+            "provider": provider,
+            "model": model,
+            "effort": effort,
+            "grader_model": grader_model,
+        },
+        answer=agent.answer,
         n=n,
-        provider=provider,
-        model=model,
-        effort=effort,
         grader_model=grader_model,
         output=output,
         seed=seed,
         concurrency=concurrency,
-        model_prices=model_prices,
         resume=resume,
     )
 
