@@ -26,6 +26,7 @@ MODEL_PRICES = {
     "moonshotai/Kimi-K2.6": (0.95, 4.00),
     "zai-org/GLM-5.2": (1.40, 4.40),
     "zai-org/GLM-5.2-Fast": (2.10, 6.60),
+    "zai-org/GLM-5.3": (1.40, 4.40),
     "zai-org/GLM-5.3-Fast": (2.10, 6.60),
     "openai/gpt-oss-120b": (0.10, 0.50),
     "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": (0.60, 2.40),

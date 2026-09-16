@@ -49,7 +49,7 @@ Per-token model prices and per-call search prices live in `src/baseten_compariso
 
 - Model: Baseten serverless $/M tokens, July 2026 list prices (models.dev). DeepSeek-V4-Flash-0731
   and GLM-5.2-Fast have no published Baseten rate; official/Fireworks list prices are used.
-  DeepSeek-V4.1-Flash and GLM-5.3-Fast use Baseten model-library list prices, Sep 2026.
+  DeepSeek-V4.1-Flash, GLM-5.3 and GLM-5.3-Fast use Baseten model-library list prices, Sep 2026.
 - Search, $/1k calls, Aug 2026: Exa $7 search / $1 contents (exa.ai/pricing), Parallel $5
   (docs.parallel.ai), You.com $5 search / $1 contents (you.com/pricing). Keenable has no public
   per-request price; $4/1k is an internal figure applied to search and fetch.
@@ -92,7 +92,7 @@ model and grader match the current run; everything else is rerun.
 
 ## Results
 
-Keenable vs Exa vs You.com vs Parallel, run 2026-09-14/15. Grader GPT-5.5, seed 0, costs in USD for the full run using
+Keenable vs Exa vs You.com vs Parallel, run 2026-09-14/16. Grader GPT-5.5, seed 0, costs in USD for the full run using
 the price table above. Raw rows are in `results/`. Earlier DeepSeek-V4-Pro / V4-Flash results:
 https://paste.keenable.ai/simpleqa-keenable-vs-exa-deepseek-v4.
 
@@ -121,6 +121,18 @@ https://paste.keenable.ai/simpleqa-keenable-vs-exa-deepseek-v4.
 | Model cost | $16.68 | $14.11 | $37.02 | $11.08 |
 | Model + search cost | $22.60 | $22.95 | $43.35 | $16.51 |
 | Answer latency p50 / p90 | 3.1s / 5.0s | 6.2s / 16.1s | 4.1s / 24.6s | 4.0s / 29.1s |
+
+#### GLM-5.3
+
+| | Keenable | Exa | You.com | Parallel |
+| --- | --- | --- | --- | --- |
+| Accuracy | **97.7%** | **96.8%** | **97.1%** | **97.6%** |
+| Correct / Incorrect / Not attempted | 977 / 23 / 0 | 968 / 32 / 0 | 971 / 28 / 1 | 976 / 23 / 1 |
+| Search calls (search + fetch) | 1392 + 65 | 1233 + 48 | 1228 + 39 | 1066 + 0 |
+| Search cost | $5.83 | $8.68 | $6.18 | $5.33 |
+| Model cost | $10.91 | $9.36 | $18.16 | $6.56 |
+| Model + search cost | $16.74 | $18.04 | $24.33 | $11.89 |
+| Answer latency p50 / p90 | 6.7s / 25.2s | 9.3s / 28.8s | 7.2s / 27.1s | 6.8s / 26.3s |
 
 ### AA-Omniscience (600 questions per cell, full public set)
 
@@ -171,6 +183,29 @@ Omniscience index = 100 × (correct − incorrect) / total. Declining costs noth
 | Law | 93 / +88 | 96 / +92 | 93 / +88 | 90 / +81 |
 | Science Engineering and Mathematics | 81 / +66 | 77 / +55 | 80 / +72 | 78 / +66 |
 | Software Engineering | 92 / +85 | 97 / +94 | 95 / +90 | 95 / +90 |
+
+#### GLM-5.3
+
+| | Keenable | Exa | You.com | Parallel |
+| --- | --- | --- | --- | --- |
+| Omniscience index | **+75.0** | **+81.2** | **+72.5** | **+78.7** |
+| Accuracy | 86.3% | 90.0% | 85.7% | 88.8% |
+| Correct / Incorrect / Not attempted | 518 / 68 / 14 | 540 / 53 / 7 | 514 / 79 / 7 | 533 / 61 / 6 |
+| Accuracy on attempted | 88.4% | 91.1% | 86.7% | 89.7% |
+| Search calls (search + fetch) | 1694 + 454 | 1273 + 205 | 1536 + 206 | 1107 + 0 |
+| Search cost | $8.59 | $9.12 | $7.89 | $5.54 |
+| Model cost | $17.90 | $18.95 | $25.97 | $8.57 |
+| Model + search cost | $26.49 | $28.07 | $33.85 | $14.10 |
+| Answer latency p50 / p90 | 7.8s / 68.3s | 16.4s / 62.8s | 8.0s / 44.1s | 6.7s / 33.0s |
+
+| Domain (correct / index) | Keenable | Exa | You.com | Parallel |
+| --- | --- | --- | --- | --- |
+| Finance | 93 / +89 | 92 / +85 | 89 / +79 | 90 / +82 |
+| Health | 74 / +49 | 77 / +56 | 76 / +52 | 80 / +60 |
+| Humanities and Social Sciences | 81 / +65 | 91 / +84 | 84 / +71 | 90 / +81 |
+| Law | 93 / +88 | 98 / +96 | 88 / +77 | 96 / +92 |
+| Science Engineering and Mathematics | 83 / +71 | 84 / +70 | 81 / +64 | 81 / +65 |
+| Software Engineering | 94 / +88 | 98 / +96 | 96 / +92 | 96 / +92 |
 
 ### Exa Agent (standalone, no Baseten model)
 
